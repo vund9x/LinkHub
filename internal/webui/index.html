@@ -1,0 +1,276 @@
+<!doctype html>
+<html lang="vi" data-theme="dark">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="theme-color" content="#080c16">
+<meta name="description" content="LinkHub — bảng liên kết cá nhân chạy trong mạng LAN.">
+<title>LinkHub — Bảng liên kết của bạn</title>
+<link rel="icon" href="/static/favicon.svg" type="image/svg+xml">
+<script>
+  try {
+    var savedTheme = localStorage.getItem('lh-theme');
+    var theme = savedTheme || (matchMedia('(prefers-color-scheme: light)').matches ? 'light' : 'dark');
+    document.documentElement.dataset.theme = theme;
+    var savedDensity = localStorage.getItem('lh-density');
+    document.documentElement.dataset.density =
+      ['default', 'compact', 'mini'].indexOf(savedDensity) >= 0 ? savedDensity : 'default';
+  } catch (e) {}
+</script>
+<link rel="stylesheet" href="/static/app.css">
+</head>
+<body>
+<div class="bg-glow" aria-hidden="true"></div>
+
+<svg xmlns="http://www.w3.org/2000/svg" class="sprite" aria-hidden="true">
+  <symbol id="i-plus" viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></symbol>
+  <symbol id="i-search" viewBox="0 0 24 24"><circle cx="11" cy="11" r="7"/><path d="M21 21l-4.3-4.3"/></symbol>
+  <symbol id="i-star" viewBox="0 0 24 24"><path d="M12 3.6l2.6 5.3 5.9.9-4.3 4.2 1 5.8-5.2-2.7-5.2 2.7 1-5.8-4.3-4.2 5.9-.9L12 3.6z"/></symbol>
+  <symbol id="i-edit" viewBox="0 0 24 24"><path d="M12 20h9"/><path d="M16.5 3.5a2.12 2.12 0 013 3L7 19l-4 1 1-4L16.5 3.5z"/></symbol>
+  <symbol id="i-trash" viewBox="0 0 24 24"><path d="M3 6h18M8 6V4h8v2M6 6l1 14h10l1-14"/><path d="M10 11v6M14 11v6"/></symbol>
+  <symbol id="i-copy" viewBox="0 0 24 24"><rect x="9" y="9" width="11" height="11" rx="2"/><path d="M5 15V5a2 2 0 012-2h8"/></symbol>
+  <symbol id="i-x" viewBox="0 0 24 24"><path d="M18 6L6 18M6 6l12 12"/></symbol>
+  <symbol id="i-upload" viewBox="0 0 24 24"><path d="M12 16V4M6 10l6-6 6 6M4 20h16"/></symbol>
+  <symbol id="i-download" viewBox="0 0 24 24"><path d="M12 4v12M6 10l6 6 6-6M4 20h16"/></symbol>
+  <symbol id="i-sun" viewBox="0 0 24 24"><circle cx="12" cy="12" r="4.2"/><path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"/></symbol>
+  <symbol id="i-moon" viewBox="0 0 24 24"><path d="M21 12.8A8.6 8.6 0 1111.2 3a7 7 0 009.8 9.8z"/></symbol>
+  <symbol id="i-activity" viewBox="0 0 24 24"><path d="M3 12h4l3 8 4-16 3 8h4"/></symbol>
+  <symbol id="i-grid" viewBox="0 0 24 24"><rect x="3" y="3" width="7" height="7" rx="2"/><rect x="14" y="3" width="7" height="7" rx="2"/><rect x="3" y="14" width="7" height="7" rx="2"/><rect x="14" y="14" width="7" height="7" rx="2"/></symbol>
+  <symbol id="i-sparkles" viewBox="0 0 24 24"><path d="M12 3l1.7 4.5L18 9.2l-4.3 1.7L12 15.4l-1.7-4.5L6 9.2l4.3-1.7L12 3z"/><path d="M18.5 15l.9 2.3 2.1.8-2.1.8-.9 2.3-.9-2.3-2.1-.8 2.1-.8.9-2.3z"/></symbol>
+  <symbol id="i-check" viewBox="0 0 24 24"><path d="M20 6L9 17l-5-5"/></symbol>
+  <symbol id="i-folder" viewBox="0 0 24 24"><path d="M3 7a2 2 0 012-2h4l2 2h8a2 2 0 012 2v8a2 2 0 01-2 2H5a2 2 0 01-2-2V7z"/></symbol>
+  <symbol id="i-link" viewBox="0 0 24 24"><path d="M10 13a5 5 0 007.5.5l2-2a5 5 0 00-7-7l-1.2 1.2"/><path d="M14 11a5 5 0 00-7.5-.5l-2 2a5 5 0 007 7l1.2-1.2"/></symbol>
+  <symbol id="i-star-fill" viewBox="0 0 24 24"><path fill="currentColor" stroke="none" d="M12 3.6l2.6 5.3 5.9.9-4.3 4.2 1 5.8-5.2-2.7-5.2 2.7 1-5.8-4.3-4.2 5.9-.9L12 3.6z"/></symbol>
+  <symbol id="i-inbox" viewBox="0 0 24 24"><path d="M4 5h16l2 9v4a2 2 0 01-2 2H4a2 2 0 01-2-2v-4l2-9z"/><path d="M2 14h5l2 3h6l2-3h5"/></symbol>
+</svg>
+
+<div class="app">
+  <aside class="sidebar">
+    <div class="brand">
+      <span class="brand-mark">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M10 13a5 5 0 007.5.5l2-2a5 5 0 00-7-7l-1.2 1.2" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/><path d="M14 11a5 5 0 00-7.5-.5l-2 2a5 5 0 007 7l1.2-1.2" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
+      </span>
+      <div class="brand-text">
+        <b>LinkHub</b>
+        <small>Bảng liên kết cá nhân</small>
+      </div>
+    </div>
+
+    <button class="btn btn-primary btn-block" type="button" data-action="add">
+      <svg class="ic"><use href="#i-plus"/></svg>
+      Thêm liên kết
+    </button>
+
+    <nav class="nav" aria-label="Bộ lọc liên kết">
+      <p class="nav-label">Thư viện</p>
+      <button class="nav-item" type="button" data-filter="all">
+        <svg class="ic"><use href="#i-grid"/></svg>
+        <span>Tất cả</span>
+        <span class="pill" data-count="all">0</span>
+      </button>
+      <button class="nav-item" type="button" data-filter="fav">
+        <svg class="ic"><use href="#i-star"/></svg>
+        <span>Yêu thích</span>
+        <span class="pill" data-count="fav">0</span>
+      </button>
+
+      <p class="nav-label nav-label-row">
+        <span>Danh mục</span>
+        <span class="pill" data-count="cats">0</span>
+      </p>
+      <div id="catNav" class="cats"></div>
+    </nav>
+
+    <div class="sidebar-foot">
+      <button class="icon-btn" type="button" id="themeBtn" title="Đổi giao diện sáng/tối" aria-label="Đổi giao diện">
+        <svg class="ic"><use href="#i-moon"/></svg>
+      </button>
+      <button class="icon-btn" type="button" id="importBtn" title="Nhập dữ liệu JSON" aria-label="Nhập dữ liệu">
+        <svg class="ic"><use href="#i-upload"/></svg>
+      </button>
+      <button class="icon-btn" type="button" id="exportBtn" title="Xuất dữ liệu JSON" aria-label="Xuất dữ liệu">
+        <svg class="ic"><use href="#i-download"/></svg>
+      </button>
+      <span class="foot-note">Chạy trong LAN</span>
+    </div>
+  </aside>
+
+  <main class="main">
+    <header class="topbar">
+      <div class="hello">
+        <h1 id="greeting">Xin chào</h1>
+        <p id="today">Hôm nay</p>
+      </div>
+
+      <div class="search">
+        <svg class="ic"><use href="#i-search"/></svg>
+        <input id="searchInput" type="search" placeholder="Tìm kiếm liên kết, danh mục, mô tả..." autocomplete="off" aria-label="Tìm kiếm liên kết">
+        <kbd>/</kbd>
+      </div>
+
+      <div class="top-actions">
+        <div class="density-wrap">
+          <button class="btn" type="button" id="densityBtn" aria-haspopup="menu" aria-expanded="false" aria-controls="densityMenu" title="Chọn cách hiển thị thẻ">
+            <svg class="ic"><use href="#i-grid"/></svg>
+            <span>Hiển thị</span>
+          </button>
+          <div class="density-menu" id="densityMenu" role="menu" aria-label="Cách hiển thị thẻ" hidden>
+            <p class="density-label">Cách hiển thị</p>
+            <button class="density-item" type="button" role="menuitemradio" aria-checked="true" data-density="default">
+              <span class="density-text"><b>Mặc định</b><small>Thẻ vừa, đầy đủ mô tả</small></span>
+              <svg class="ic density-check"><use href="#i-check"/></svg>
+            </button>
+            <button class="density-item" type="button" role="menuitemradio" aria-checked="false" data-density="compact">
+              <span class="density-text"><b>Gọn</b><small>Thẻ nhỏ hơn, mô tả 1 dòng</small></span>
+              <svg class="ic density-check"><use href="#i-check"/></svg>
+            </button>
+            <button class="density-item" type="button" role="menuitemradio" aria-checked="false" data-density="mini">
+              <span class="density-text"><b>Nhỏ</b><small>Chỉ tên và danh mục</small></span>
+              <svg class="ic density-check"><use href="#i-check"/></svg>
+            </button>
+          </div>
+        </div>
+        <label class="select-wrap">
+          <span class="sr-only">Sắp xếp</span>
+          <select id="sortSelect">
+            <option value="manual">Thủ công</option>
+            <option value="recent">Mới nhất</option>
+            <option value="visits">Xem nhiều</option>
+            <option value="az">A → Z</option>
+          </select>
+        </label>
+        <button class="btn" type="button" id="checkBtn" title="Kiểm tra trạng thái các liên kết" aria-label="Kiểm tra trạng thái các liên kết">
+          <svg class="ic"><use href="#i-activity"/></svg>
+          <span>Kiểm tra</span>
+        </button>
+        <button class="btn btn-primary" type="button" data-action="add">
+          <svg class="ic"><use href="#i-plus"/></svg>
+          <span>Thêm</span>
+        </button>
+      </div>
+    </header>
+
+    <div class="meta-row">
+      <div class="meta-stats" id="metaText"></div>
+      <div class="mobile-cats" id="mobileCats"></div>
+      <button class="chip chip-clear" type="button" id="clearFilter" hidden>
+        <svg class="ic"><use href="#i-x"/></svg>
+        Xóa bộ lọc
+      </button>
+    </div>
+
+    <section id="grid" class="grid" aria-live="polite"></section>
+
+    <section id="empty" class="empty" hidden>
+      <div class="empty-icon">
+        <svg class="ic"><use href="#i-inbox"/></svg>
+      </div>
+      <h2 id="emptyTitle">Chưa có liên kết nào</h2>
+      <p id="emptyText">Thêm những trang web bạn hay dùng để truy cập nhanh hơn.</p>
+      <button class="btn btn-primary" type="button" data-action="add">
+        <svg class="ic"><use href="#i-plus"/></svg>
+        <span id="emptyAddText">Thêm liên kết đầu tiên</span>
+      </button>
+    </section>
+
+    <footer class="page-foot">
+      <span>LinkHub</span>
+      <span class="dot-sep"></span>
+      <span id="footCount">0 liên kết</span>
+      <span class="dot-sep"></span>
+      <span>Dữ liệu lưu cục bộ trên máy chủ</span>
+    </footer>
+  </main>
+</div>
+
+<div id="toasts" class="toasts" aria-live="polite" aria-atomic="false"></div>
+
+<dialog id="editDialog" class="dialog">
+  <form id="linkForm" novalidate>
+    <header class="dialog-head">
+      <div>
+        <h2 id="dialogTitle">Thêm liên kết</h2>
+        <p class="dialog-sub">Chỉ cần URL, các thông tin khác có thể để trống.</p>
+      </div>
+      <button class="icon-btn" type="button" data-close aria-label="Đóng">
+        <svg class="ic"><use href="#i-x"/></svg>
+      </button>
+    </header>
+
+    <label class="field">
+      <span class="field-label">URL <em>*</em></span>
+      <div class="url-row">
+        <input id="fUrl" type="text" inputmode="url" placeholder="github.com" autocomplete="off" spellcheck="false" required>
+        <button class="btn btn-sm" type="button" id="fetchBtn" title="Tự động lấy tiêu đề và mô tả từ trang web">
+          <svg class="ic"><use href="#i-sparkles"/></svg>
+          <span>Lấy tiêu đề</span>
+        </button>
+      </div>
+      <span class="field-hint">Không cần nhập https:// — hệ thống sẽ tự thêm.</span>
+    </label>
+
+    <div class="field-grid">
+      <label class="field">
+        <span class="field-label">Tiêu đề</span>
+        <input id="fTitle" type="text" maxlength="120" placeholder="Tự động từ tên miền">
+      </label>
+      <label class="field">
+        <span class="field-label">Danh mục</span>
+        <input id="fCategory" type="text" maxlength="40" list="categoryOptions" placeholder="Ví dụ: Công cụ">
+        <datalist id="categoryOptions"></datalist>
+      </label>
+    </div>
+
+    <label class="field">
+      <span class="field-label">Mô tả</span>
+      <textarea id="fDesc" rows="2" maxlength="240" placeholder="Ghi chú ngắn về liên kết này"></textarea>
+    </label>
+
+    <div class="field-grid">
+      <label class="field">
+        <span class="field-label">Biểu tượng</span>
+        <input id="fIcon" type="text" maxlength="8" placeholder="Emoji tùy chọn">
+        <span class="field-hint">Để trống sẽ dùng favicon của trang.</span>
+      </label>
+      <label class="check">
+        <input type="checkbox" id="fPinned">
+        <span class="check-box"><svg class="ic"><use href="#i-check"/></svg></span>
+        <span class="check-text">
+          <b>Yêu thích</b>
+          <small>Hiện trong bộ lọc Yêu thích</small>
+        </span>
+      </label>
+    </div>
+
+    <p class="form-error" id="formError" hidden></p>
+
+    <footer class="dialog-foot">
+      <button class="btn" type="button" data-close>Hủy</button>
+      <button class="btn btn-primary" type="submit" id="saveBtn">Lưu liên kết</button>
+    </footer>
+  </form>
+</dialog>
+
+<dialog id="confirmDialog" class="dialog dialog-sm">
+  <div class="confirm-body">
+    <div class="confirm-icon">
+      <svg class="ic"><use href="#i-trash"/></svg>
+    </div>
+    <h2 id="confirmTitle">Xóa liên kết?</h2>
+    <p id="confirmText">Hành động này không thể hoàn tác.</p>
+    <footer class="dialog-foot">
+      <button class="btn" type="button" id="cancelConfirm">Hủy</button>
+      <button class="btn btn-danger" type="button" id="okConfirm">Xóa</button>
+    </footer>
+  </div>
+</dialog>
+
+<input type="file" id="fileInput" accept="application/json,.json" hidden>
+
+<noscript>
+  <div class="noscript">LinkHub cần JavaScript để hiển thị và quản lý liên kết.</div>
+</noscript>
+
+<script src="/static/app.js"></script>
+</body>
+</html>

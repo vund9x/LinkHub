@@ -1,0 +1,15 @@
+# Sản phẩm build
+/bin/
+/linkhub
+/linkhub.exe
+*.exe
+
+# Dữ liệu chạy
+/data/
+*.tmp
+
+# Hệ điều hành / trình soạn thảo
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
