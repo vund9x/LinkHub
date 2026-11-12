@@ -2,25 +2,29 @@ package server
 
 import (
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
 	"strings"
 	"time"
 
 	"linkhub/internal/link"
+	"linkhub/internal/store"
 )
 
-func (s *Server) handleList(w http.ResponseWriter, r *http.Request) {
-	writeJSON(w, http.StatusOK, s.store.List())
-}
+const (
+	maxCategoriesPerLink = 12
+	maxCategoryName      = 40
+)
 
 type linkInput struct {
-	Title       string `json:"title"`
-	URL         string `json:"url"`
-	Description string `json:"description"`
-	Category    string `json:"category"`
-	Icon        string `json:"icon"`
-	Pinned      bool   `json:"pinned"`
+	Title       string   `json:"title"`
+	URL         string   `json:"url"`
+	Description string   `json:"description"`
+	CategoryIDs []string `json:"categoryIds"`
+	Category    string   `json:"category"` // tên danh mục, tương thích API cũ
+	Icon        string   `json:"icon"`
+	Pinned      bool     `json:"pinned"`
 }
 
 func (in *linkInput) sanitize() error {
@@ -31,12 +35,119 @@ func (in *linkInput) sanitize() error {
 	in.URL = normalized
 	in.Title = truncate(strings.TrimSpace(in.Title), 120)
 	in.Description = truncate(strings.TrimSpace(in.Description), 240)
-	in.Category = truncate(strings.TrimSpace(in.Category), 40)
 	in.Icon = truncate(strings.TrimSpace(in.Icon), 8)
+	in.CategoryIDs = cleanCategoryIDs(in.CategoryIDs)
 	if in.Title == "" {
 		in.Title = hostLabel(in.URL)
 	}
 	return nil
+}
+
+func cleanCategoryIDs(ids []string) []string {
+	out := make([]string, 0, len(ids))
+	seen := make(map[string]bool, len(ids))
+	for _, raw := range ids {
+		id := truncate(strings.TrimSpace(raw), 32)
+		if id == "" || seen[id] {
+			continue
+		}
+		seen[id] = true
+		out = append(out, id)
+		if len(out) >= maxCategoriesPerLink {
+			break
+		}
+	}
+	return out
+}
+
+// resolveCategory dùng cho trường category kiểu cũ: tạo danh mục nếu chưa có.
+func (s *Server) resolveCategory(in *linkInput) (string, error) {
+	name := truncate(strings.TrimSpace(in.Category), maxCategoryName)
+	if name == "" {
+		return "", nil
+	}
+	cat, _, err := s.store.CreateCategory(name)
+	if err != nil {
+		return "", err
+	}
+	return cat.ID, nil
+}
+
+func (s *Server) handleList(w http.ResponseWriter, r *http.Request) {
+	writeJSON(w, http.StatusOK, s.store.List())
+}
+
+func (s *Server) handleListCategories(w http.ResponseWriter, r *http.Request) {
+	writeJSON(w, http.StatusOK, s.store.Categories())
+}
+
+type categoryInput struct {
+	Name string `json:"name"`
+}
+
+func (s *Server) handleCreateCategory(w http.ResponseWriter, r *http.Request) {
+	var in categoryInput
+	if err := decodeJSON(w, r, &in); err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	name := truncate(strings.TrimSpace(in.Name), maxCategoryName)
+	if name == "" {
+		writeError(w, http.StatusBadRequest, "Tên danh mục không được để trống")
+		return
+	}
+
+	cat, created, err := s.store.CreateCategory(name)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "Không thể lưu danh mục")
+		return
+	}
+	status := http.StatusOK
+	if created {
+		status = http.StatusCreated
+	}
+	writeJSON(w, status, cat)
+}
+
+func (s *Server) handleUpdateCategory(w http.ResponseWriter, r *http.Request) {
+	var in categoryInput
+	if err := decodeJSON(w, r, &in); err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	name := truncate(strings.TrimSpace(in.Name), maxCategoryName)
+	if name == "" {
+		writeError(w, http.StatusBadRequest, "Tên danh mục không được để trống")
+		return
+	}
+
+	cat, found, err := s.store.UpdateCategory(r.PathValue("id"), name)
+	if errors.Is(err, store.ErrCategoryNameTaken) {
+		writeError(w, http.StatusConflict, "Danh mục “"+name+"” đã tồn tại")
+		return
+	}
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "Không thể lưu danh mục")
+		return
+	}
+	if !found {
+		writeError(w, http.StatusNotFound, "Không tìm thấy danh mục")
+		return
+	}
+	writeJSON(w, http.StatusOK, cat)
+}
+
+func (s *Server) handleDeleteCategory(w http.ResponseWriter, r *http.Request) {
+	found, err := s.store.DeleteCategory(r.PathValue("id"))
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "Không thể xóa danh mục")
+		return
+	}
+	if !found {
+		writeError(w, http.StatusNotFound, "Không tìm thấy danh mục")
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
 }
 
 func (s *Server) handleCreate(w http.ResponseWriter, r *http.Request) {
@@ -49,12 +160,18 @@ func (s *Server) handleCreate(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
+	legacyID, err := s.resolveCategory(&in)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "Không thể lưu danh mục")
+		return
+	}
+	in.CategoryIDs = appendCategoryID(in.CategoryIDs, legacyID)
 
 	created, err := s.store.Create(link.Link{
 		Title:       in.Title,
 		URL:         in.URL,
 		Description: in.Description,
-		Category:    in.Category,
+		CategoryIDs: in.CategoryIDs,
 		Icon:        in.Icon,
 		Pinned:      in.Pinned,
 	})
@@ -63,6 +180,18 @@ func (s *Server) handleCreate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusCreated, created)
+}
+
+func appendCategoryID(ids []string, id string) []string {
+	if id == "" || len(ids) >= maxCategoriesPerLink {
+		return ids
+	}
+	for _, existing := range ids {
+		if existing == id {
+			return ids
+		}
+	}
+	return append(ids, id)
 }
 
 func (s *Server) handleUpdate(w http.ResponseWriter, r *http.Request) {
@@ -75,12 +204,18 @@ func (s *Server) handleUpdate(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
+	legacyID, err := s.resolveCategory(&in)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "Không thể lưu danh mục")
+		return
+	}
+	in.CategoryIDs = appendCategoryID(in.CategoryIDs, legacyID)
 
 	updated, found, err := s.store.Update(r.PathValue("id"), func(l *link.Link) {
 		l.Title = in.Title
 		l.URL = in.URL
 		l.Description = in.Description
-		l.Category = in.Category
+		l.CategoryIDs = in.CategoryIDs
 		l.Icon = in.Icon
 		l.Pinned = in.Pinned
 	})
@@ -138,8 +273,9 @@ func (s *Server) handleReorder(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) handleExport(w http.ResponseWriter, r *http.Request) {
 	payload := map[string]any{
-		"version":    1,
+		"version":    2,
 		"exportedAt": time.Now().UTC(),
+		"categories": s.store.Categories(),
 		"links":      s.store.List(),
 	}
 	data, err := json.MarshalIndent(payload, "", "  ")
@@ -161,10 +297,11 @@ func (s *Server) handleImport(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var file struct {
-		Links []link.Link `json:"links"`
+		Categories []link.Category    `json:"categories"`
+		Links      []store.ImportLink `json:"links"`
 	}
 	if err := json.Unmarshal(body, &file); err != nil {
-		var arr []link.Link
+		var arr []store.ImportLink
 		if err2 := json.Unmarshal(body, &arr); err2 != nil {
 			writeError(w, http.StatusBadRequest, "Tệp JSON không hợp lệ")
 			return
@@ -172,7 +309,7 @@ func (s *Server) handleImport(w http.ResponseWriter, r *http.Request) {
 		file.Links = arr
 	}
 
-	cleaned := make([]link.Link, 0, len(file.Links))
+	cleaned := make([]store.ImportLink, 0, len(file.Links))
 	skipped := 0
 	for _, l := range file.Links {
 		normalized, err := normalizeURL(l.URL)
@@ -183,7 +320,8 @@ func (s *Server) handleImport(w http.ResponseWriter, r *http.Request) {
 		l.URL = normalized
 		l.Title = truncate(strings.TrimSpace(l.Title), 120)
 		l.Description = truncate(strings.TrimSpace(l.Description), 240)
-		l.Category = truncate(strings.TrimSpace(l.Category), 40)
+		l.Category = truncate(strings.TrimSpace(l.Category), maxCategoryName)
+		l.CategoryIDs = cleanCategoryIDs(l.CategoryIDs)
 		l.Icon = truncate(strings.TrimSpace(l.Icon), 8)
 		if l.Title == "" {
 			l.Title = hostLabel(l.URL)
@@ -191,8 +329,19 @@ func (s *Server) handleImport(w http.ResponseWriter, r *http.Request) {
 		cleaned = append(cleaned, l)
 	}
 
+	categories := make([]link.Category, 0, len(file.Categories))
+	for _, c := range file.Categories {
+		name := truncate(strings.TrimSpace(c.Name), maxCategoryName)
+		if name == "" {
+			continue
+		}
+		c.Name = name
+		c.ID = truncate(strings.TrimSpace(c.ID), 32)
+		categories = append(categories, c)
+	}
+
 	replace := r.URL.Query().Get("mode") == "replace"
-	added, err := s.store.Import(cleaned, replace)
+	added, err := s.store.Import(categories, cleaned, replace)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "Không thể nhập dữ liệu")
 		return

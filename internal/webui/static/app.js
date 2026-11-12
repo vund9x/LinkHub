@@ -13,7 +13,7 @@ const els = {
   footCount: $('#footCount'),
   catNav: $('#catNav'),
   mobileCats: $('#mobileCats'),
-  categoryOptions: $('#categoryOptions'),
+  manageCatsBtn: $('#manageCatsBtn'),
   searchInput: $('#searchInput'),
   sortSelect: $('#sortSelect'),
   densityBtn: $('#densityBtn'),
@@ -35,10 +35,20 @@ const els = {
   fetchBtn: $('#fetchBtn'),
   fUrl: $('#fUrl'),
   fTitle: $('#fTitle'),
-  fCategory: $('#fCategory'),
+  fCatInput: $('#fCatInput'),
+  catPicker: $('#catPicker'),
+  catPickerField: $('#catPickerField'),
+  catPickerChips: $('#catPickerChips'),
+  catMenu: $('#catMenu'),
   fDesc: $('#fDesc'),
   fIcon: $('#fIcon'),
   fPinned: $('#fPinned'),
+  catDialog: $('#catDialog'),
+  catCreateForm: $('#catCreateForm'),
+  catNameInput: $('#catNameInput'),
+  catList: $('#catList'),
+  catEmpty: $('#catEmpty'),
+  catError: $('#catError'),
   confirmDialog: $('#confirmDialog'),
   confirmTitle: $('#confirmTitle'),
   confirmText: $('#confirmText'),
@@ -52,6 +62,7 @@ const UNCATEGORIZED = 'Chưa phân loại';
 
 const state = {
   links: [],
+  categories: [],
   filter: 'all',
   query: '',
   sort: SORTS.includes(localStorage.getItem('lh-sort') || '') ? localStorage.getItem('lh-sort') : 'manual',
@@ -197,26 +208,40 @@ function setGreeting() {
 }
 
 /* ---------- Data helpers ---------- */
-function categories() {
-  const map = new Map();
-  for (const link of state.links) {
-    const name = (link.category || '').trim() || UNCATEGORIZED;
-    map.set(name, (map.get(name) || 0) + 1);
-  }
-  return Array.from(map.entries()).sort((a, b) => {
-    if (a[0] === UNCATEGORIZED) return 1;
-    if (b[0] === UNCATEGORIZED) return -1;
-    return a[0].localeCompare(b[0], 'vi');
-  });
+const catById = (id) => state.categories.find((c) => c.id === id) || null;
+
+function categoriesOf(link) {
+  return (link.categoryIds || []).map(catById).filter(Boolean);
 }
 
-function categoryOf(link) {
-  return (link.category || '').trim() || UNCATEGORIZED;
+function categoryNames(link) {
+  return categoriesOf(link).map((c) => c.name);
+}
+
+function categoryCounts() {
+  const counts = new Map();
+  const byId = new Map(state.categories.map((c) => [c.id, c]));
+  for (const link of state.links) {
+    for (const id of link.categoryIds || []) {
+      if (byId.has(id)) counts.set(id, (counts.get(id) || 0) + 1);
+    }
+  }
+  return counts;
+}
+
+function uncategorizedCount() {
+  const known = new Set(state.categories.map((c) => c.id));
+  return state.links.filter((l) => !(l.categoryIds || []).some((id) => known.has(id))).length;
+}
+
+function categoryKey(name) {
+  return normalizeText(name).trim().replace(/\s+/g, ' ');
 }
 
 function matchesFilter(link) {
   if (state.filter === 'fav') return !!link.pinned;
-  if (state.filter.startsWith('cat:')) return categoryOf(link) === state.filter.slice(4);
+  if (state.filter === 'none') return categoriesOf(link).length === 0;
+  if (state.filter.startsWith('cat:')) return (link.categoryIds || []).includes(state.filter.slice(4));
   return true;
 }
 
@@ -224,7 +249,7 @@ function matchesSearch(link) {
   const q = normalizeText(state.query).trim();
   if (!q) return true;
   const haystack = normalizeText([
-    link.title, link.description, link.category, link.url, hostOf(link.url),
+    link.title, link.description, categoryNames(link).join(' '), link.url, hostOf(link.url),
   ].join(' '));
   return haystack.includes(q);
 }
@@ -257,64 +282,78 @@ function canDrag() {
 
 /* ---------- Rendering ---------- */
 function render() {
-  const cats = categories();
-  renderSidebarCounts(cats);
-  renderCatNav(cats);
-  renderMobileCats(cats);
-  renderCategoryOptions(cats);
+  const counts = categoryCounts();
+  renderSidebarCounts();
+  renderCatNav(counts);
+  renderMobileCats(counts);
+  if (els.catDialog.open) renderCatManager();
 
   const links = visibleLinks();
   renderCards(links);
-  renderMeta(links, cats);
+  renderMeta(links);
   renderFooter();
   syncControls(links);
 }
 
-function renderSidebarCounts(cats) {
+function renderSidebarCounts() {
   const set = (key, value) => {
     const el = $('[data-count="' + key + '"]');
     if (el) el.textContent = value;
   };
   set('all', fmtNumber(state.links.length));
   set('fav', fmtNumber(state.links.filter((l) => l.pinned).length));
-  set('cats', fmtNumber(cats.length));
+  set('cats', fmtNumber(state.categories.length));
 
   $$('.sidebar [data-filter]').forEach((btn) => {
     btn.classList.toggle('active', btn.dataset.filter === state.filter);
   });
 }
 
-function makeNavButton(filterValue, label, count, withIcon) {
+function makeNavButton(filterValue, label, count, opts = {}) {
   const btn = document.createElement('button');
   btn.type = 'button';
   btn.className = 'nav-item';
   btn.dataset.filter = filterValue;
-  btn.innerHTML = (withIcon ? '<svg class="ic"><use href="#i-folder"/></svg>' : '') +
+  btn.innerHTML =
+    (opts.hue !== undefined ? '<span class="cat-dot" style="--h:' + opts.hue + '"></span>' : '') +
+    (opts.withIcon ? '<svg class="ic"><use href="#i-folder"/></svg>' : '') +
     '<span></span><span class="pill"></span>';
-  const spans = btn.querySelectorAll('span');
+  const spans = btn.querySelectorAll('span:not(.cat-dot)');
   spans[0].textContent = label;
   spans[1].textContent = fmtNumber(count);
   return btn;
 }
 
-function renderCatNav(cats) {
+function renderCatNav(counts) {
   els.catNav.replaceChildren();
-  for (const [name, count] of cats) {
-    const btn = makeNavButton('cat:' + name, name, count, true);
-    if (state.filter === 'cat:' + name) btn.classList.add('active');
+  for (const cat of state.categories) {
+    const btn = makeNavButton('cat:' + cat.id, cat.name, counts.get(cat.id) || 0, { hue: hueOf(cat.name) });
+    if (state.filter === 'cat:' + cat.id) btn.classList.add('active');
+    els.catNav.append(btn);
+  }
+  const rest = uncategorizedCount();
+  if (rest > 0) {
+    const btn = makeNavButton('none', UNCATEGORIZED, rest, { withIcon: true });
+    if (state.filter === 'none') btn.classList.add('active');
     els.catNav.append(btn);
   }
 }
 
-function renderMobileCats(cats) {
+function renderMobileCats(counts) {
   els.mobileCats.replaceChildren();
 
-  const addChip = (filterValue, label, count) => {
+  const addChip = (filterValue, label, count, hue) => {
     const btn = document.createElement('button');
     btn.type = 'button';
     btn.className = 'mobile-cat' + (state.filter === filterValue ? ' active' : '');
     btn.dataset.filter = filterValue;
-    btn.textContent = label;
+    if (hue !== undefined) {
+      const dot = document.createElement('span');
+      dot.className = 'cat-dot';
+      dot.style.setProperty('--h', hue);
+      btn.append(dot);
+    }
+    btn.append(document.createTextNode(label));
     const badge = document.createElement('span');
     badge.className = 'count';
     badge.textContent = fmtNumber(count);
@@ -324,17 +363,18 @@ function renderMobileCats(cats) {
 
   addChip('all', 'Tất cả', state.links.length);
   addChip('fav', 'Yêu thích', state.links.filter((l) => l.pinned).length);
-  for (const [name, count] of cats) addChip('cat:' + name, name, count);
-}
-
-function renderCategoryOptions(cats) {
-  els.categoryOptions.replaceChildren();
-  for (const [name] of cats) {
-    if (name === UNCATEGORIZED) continue;
-    const opt = document.createElement('option');
-    opt.value = name;
-    els.categoryOptions.append(opt);
+  for (const cat of state.categories) {
+    addChip('cat:' + cat.id, cat.name, counts.get(cat.id) || 0, hueOf(cat.name));
   }
+  const rest = uncategorizedCount();
+  if (rest > 0) addChip('none', UNCATEGORIZED, rest);
+
+  const manage = document.createElement('button');
+  manage.type = 'button';
+  manage.className = 'mobile-cat mobile-cat-manage';
+  manage.dataset.action = 'manage-cats';
+  manage.innerHTML = '<svg class="ic"><use href="#i-sliders"/></svg><span>Quản lý</span>';
+  els.mobileCats.append(manage);
 }
 
 function iconHTML(link, initial) {
@@ -364,6 +404,19 @@ function actionButtons(link) {
   ].join('');
 }
 
+function tagsHTML(link, limit = 2) {
+  const cats = categoriesOf(link);
+  if (!cats.length) return '';
+  let html = cats.slice(0, limit).map((cat) =>
+    '<span class="tag" style="--h:' + hueOf(cat.name) + '">' + esc(cat.name) + '</span>'
+  ).join('');
+  if (cats.length > limit) {
+    html += '<span class="tag tag-more" title="' + esc(cats.map((c) => c.name).join(', ')) + '">+' +
+      (cats.length - limit) + '</span>';
+  }
+  return html;
+}
+
 function cardHTML(link) {
   const domain = hostOf(link.url);
   const initial = (link.title || domain || '?').trim().charAt(0).toUpperCase();
@@ -373,7 +426,6 @@ function cardHTML(link) {
     ? '<span class="status ' + status + '" title="' + (status === 'ok' ? 'Liên kết hoạt động' : 'Không phản hồi') + '"></span>'
     : '';
   const desc = link.description ? '<p class="card-desc">' + esc(link.description) + '</p>' : '';
-  const tag = link.category ? '<span class="tag">' + esc(link.category) + '</span>' : '';
   const visits = link.visits > 0
     ? '<span class="visits" title="' + esc(visitsTitle(link)) + '"><b>' + fmtNumber(link.visits) + '</b> lượt</span>'
     : '';
@@ -392,7 +444,7 @@ function cardHTML(link) {
       '</div>' +
     '</div>' +
     desc +
-    '<div class="card-foot">' + tag + visits + '</div>' +
+    '<div class="card-foot">' + tagsHTML(link) + visits + '</div>' +
     pin +
     '<div class="card-actions">' + actionButtons(link) + '</div>' +
   '</article>';
@@ -414,10 +466,10 @@ function renderCards(links) {
   }
 }
 
-function renderMeta(links, cats) {
+function renderMeta(links) {
   const totalVisits = state.links.reduce((sum, l) => sum + (l.visits || 0), 0);
   let html = '<span><b>' + fmtNumber(state.links.length) + '</b> liên kết</span>' +
-    '<span class="dot-sep"></span><span><b>' + fmtNumber(cats.length) + '</b> danh mục</span>' +
+    '<span class="dot-sep"></span><span><b>' + fmtNumber(state.categories.length) + '</b> danh mục</span>' +
     '<span class="dot-sep"></span><span><b>' + fmtNumber(totalVisits) + '</b> lượt truy cập</span>';
 
   if (state.query || state.filter !== 'all') {
@@ -443,7 +495,7 @@ function linkPayload(link, overrides = {}) {
     title: link.title,
     url: link.url,
     description: link.description || '',
-    category: link.category || '',
+    categoryIds: [...(link.categoryIds || [])],
     icon: link.icon || '',
     pinned: !!link.pinned,
     ...overrides,
@@ -467,11 +519,10 @@ function recordVisit(id) {
       const anchor = card.querySelector('.pin') || card.querySelector('.card-actions');
       card.insertBefore(foot, anchor);
     }
-    const tag = link.category ? '<span class="tag">' + esc(link.category) + '</span>' : '';
-    foot.innerHTML = tag + '<span class="visits" title="' + esc(visitsTitle(link)) + '"><b>' +
+    foot.innerHTML = tagsHTML(link) + '<span class="visits" title="' + esc(visitsTitle(link)) + '"><b>' +
       fmtNumber(link.visits) + '</b> lượt</span>';
   }
-  renderMeta(visibleLinks(), categories());
+  renderMeta(visibleLinks());
 }
 
 async function toggleFavorite(id) {
@@ -562,19 +613,184 @@ function settleConfirm(value) {
 
 /* ---------- Editor ---------- */
 let editingId = null;
+let catDraft = [];
+let catActive = 0;
+
+function findCategoryByName(name) {
+  const key = categoryKey(name);
+  if (!key) return null;
+  return state.categories.find((cat) => categoryKey(cat.name) === key) || null;
+}
+
+async function ensureCategory(name) {
+  const trimmed = name.trim().slice(0, 40);
+  const existing = findCategoryByName(trimmed);
+  if (existing) return existing;
+  const cat = await api('/api/categories', { method: 'POST', body: { name: trimmed } });
+  if (!state.categories.some((c) => c.id === cat.id)) {
+    state.categories.push(cat);
+    render();
+  }
+  return cat;
+}
+
+function renderCatChips() {
+  const selected = state.categories.filter((cat) => catDraft.includes(cat.id));
+  els.catPickerChips.replaceChildren();
+  for (const cat of selected) {
+    const chip = document.createElement('span');
+    chip.className = 'cat-chip';
+    chip.style.setProperty('--h', hueOf(cat.name));
+
+    const dot = document.createElement('span');
+    dot.className = 'cat-dot';
+
+    const label = document.createElement('span');
+    label.className = 'cat-chip-label';
+    label.textContent = cat.name;
+
+    const remove = document.createElement('button');
+    remove.type = 'button';
+    remove.className = 'cat-chip-x';
+    remove.setAttribute('aria-label', 'Bỏ danh mục ' + cat.name);
+    remove.innerHTML = '<svg class="ic"><use href="#i-x"/></svg>';
+    remove.addEventListener('click', (event) => {
+      event.stopPropagation();
+      toggleCatDraft(cat.id);
+      els.fCatInput.focus();
+    });
+
+    chip.append(dot, label, remove);
+    els.catPickerChips.append(chip);
+  }
+  els.fCatInput.placeholder = selected.length ? 'Thêm danh mục...' : 'Tìm hoặc thêm danh mục...';
+}
+
+function catMenuItems() {
+  const query = els.fCatInput.value.trim();
+  const key = categoryKey(query);
+  const matched = state.categories.filter((cat) => !key || categoryKey(cat.name).includes(key));
+  const exact = query ? state.categories.find((cat) => categoryKey(cat.name) === key) : null;
+  const items = [];
+  if (query && !exact) items.push({ type: 'create', name: query });
+  for (const cat of matched) items.push({ type: 'cat', cat });
+  return items;
+}
+
+function openCatMenu() {
+  els.catMenu.hidden = false;
+  els.catPicker.classList.add('open');
+  els.fCatInput.setAttribute('aria-expanded', 'true');
+}
+
+function closeCatMenu() {
+  if (els.catMenu.hidden) return;
+  els.catMenu.hidden = true;
+  els.catPicker.classList.remove('open');
+  els.fCatInput.setAttribute('aria-expanded', 'false');
+  catActive = 0;
+}
+
+function renderCatMenu() {
+  const items = catMenuItems();
+  if (catActive >= items.length) catActive = Math.max(0, items.length - 1);
+  els.catMenu.replaceChildren();
+
+  if (!items.length) {
+    const empty = document.createElement('p');
+    empty.className = 'cat-menu-empty';
+    empty.textContent = 'Chưa có danh mục. Nhập tên để tạo mới.';
+    els.catMenu.append(empty);
+  }
+
+  items.forEach((item, index) => {
+    const btn = document.createElement('button');
+    btn.type = 'button';
+    btn.className = 'cat-option';
+    btn.setAttribute('role', 'option');
+    if (index === catActive) btn.classList.add('active');
+
+    if (item.type === 'create') {
+      btn.classList.add('create');
+      const icon = document.createElement('span');
+      icon.className = 'cat-option-icon';
+      icon.innerHTML = '<svg class="ic"><use href="#i-plus"/></svg>';
+      const label = document.createElement('span');
+      label.className = 'cat-option-name';
+      label.textContent = 'Tạo danh mục “' + item.name + '”';
+      btn.append(icon, label);
+    } else {
+      const dot = document.createElement('span');
+      dot.className = 'cat-dot';
+      dot.style.setProperty('--h', hueOf(item.cat.name));
+      const label = document.createElement('span');
+      label.className = 'cat-option-name';
+      label.textContent = item.cat.name;
+      btn.append(dot, label);
+      if (catDraft.includes(item.cat.id)) {
+        btn.classList.add('selected');
+        btn.setAttribute('aria-selected', 'true');
+        const check = document.createElement('span');
+        check.className = 'cat-option-check';
+        check.innerHTML = '<svg class="ic"><use href="#i-check"/></svg>';
+        btn.append(check);
+      }
+    }
+
+    btn.addEventListener('pointerdown', (event) => {
+      event.preventDefault();
+      chooseCatItem(index);
+    });
+    els.catMenu.append(btn);
+  });
+
+  openCatMenu();
+}
+
+function toggleCatDraft(id) {
+  if (catDraft.includes(id)) catDraft = catDraft.filter((x) => x !== id);
+  else catDraft.push(id);
+  renderCatChips();
+  renderCatMenu();
+}
+
+async function chooseCatItem(index) {
+  const item = catMenuItems()[index];
+  if (!item) return;
+  if (item.type === 'create') {
+    try {
+      const cat = await ensureCategory(item.name);
+      if (!catDraft.includes(cat.id)) catDraft.push(cat.id);
+      els.fCatInput.value = '';
+      renderCatChips();
+      renderCatMenu();
+    } catch (err) {
+      toast(err.message, 'error');
+    }
+    els.fCatInput.focus();
+    return;
+  }
+  els.fCatInput.value = '';
+  toggleCatDraft(item.cat.id);
+  els.fCatInput.focus();
+}
 
 function openEditor(link) {
   editingId = link ? link.id : null;
   els.linkForm.reset();
   els.formError.hidden = true;
 
+  catDraft = link
+    ? [...new Set(link.categoryIds || [])].filter((id) => catById(id))
+    : state.filter.startsWith('cat:')
+      ? [state.filter.slice(4)]
+      : [];
+  els.fCatInput.value = '';
+  closeCatMenu();
+  renderCatChips();
+
   els.fUrl.value = link ? link.url : '';
   els.fTitle.value = link ? link.title : '';
-  els.fCategory.value = link
-    ? link.category || ''
-    : state.filter.startsWith('cat:') && state.filter.slice(4) !== UNCATEGORIZED
-      ? state.filter.slice(4)
-      : '';
   els.fDesc.value = link ? link.description || '' : '';
   els.fIcon.value = link ? link.icon || '' : '';
   els.fPinned.checked = link ? !!link.pinned : false;
@@ -613,19 +829,26 @@ async function submitEditor(event) {
     return;
   }
 
-  const payload = {
-    url: rawURL,
-    title: els.fTitle.value.trim(),
-    description: els.fDesc.value.trim(),
-    category: els.fCategory.value.trim(),
-    icon: els.fIcon.value.trim(),
-    pinned: els.fPinned.checked,
-  };
-
   els.saveBtn.classList.add('loading');
   els.saveBtn.disabled = true;
 
   try {
+    const categoryIDs = [...catDraft];
+    const typedCategory = els.fCatInput.value.trim();
+    if (typedCategory) {
+      const cat = await ensureCategory(typedCategory);
+      if (!categoryIDs.includes(cat.id)) categoryIDs.push(cat.id);
+    }
+
+    const payload = {
+      url: rawURL,
+      title: els.fTitle.value.trim(),
+      description: els.fDesc.value.trim(),
+      categoryIds: categoryIDs,
+      icon: els.fIcon.value.trim(),
+      pinned: els.fPinned.checked,
+    };
+
     if (editingId) {
       const saved = await api('/api/links/' + encodeURIComponent(editingId), { method: 'PUT', body: payload });
       const index = state.links.findIndex((l) => l.id === editingId);
@@ -647,6 +870,135 @@ async function submitEditor(event) {
   } finally {
     els.saveBtn.classList.remove('loading');
     els.saveBtn.disabled = false;
+  }
+}
+
+/* ---------- Category manager ---------- */
+function openCatManager() {
+  els.catError.hidden = true;
+  els.catNameInput.value = '';
+  renderCatManager();
+  els.catDialog.showModal();
+  setTimeout(() => els.catNameInput.focus(), 60);
+}
+
+function renderCatManager() {
+  const counts = categoryCounts();
+  els.catList.replaceChildren();
+
+  for (const cat of state.categories) {
+    const row = document.createElement('li');
+    row.className = 'cat-row';
+    row.dataset.id = cat.id;
+
+    const dot = document.createElement('span');
+    dot.className = 'cat-dot';
+    dot.style.setProperty('--h', hueOf(cat.name));
+
+    const input = document.createElement('input');
+    input.className = 'cat-name';
+    input.type = 'text';
+    input.maxLength = 40;
+    input.value = cat.name;
+    input.setAttribute('aria-label', 'Tên danh mục ' + cat.name);
+
+    const count = document.createElement('span');
+    count.className = 'cat-count';
+    count.textContent = fmtNumber(counts.get(cat.id) || 0);
+    count.title = (counts.get(cat.id) || 0) + ' liên kết';
+
+    const del = document.createElement('button');
+    del.type = 'button';
+    del.className = 'icon-btn cat-del';
+    del.dataset.catDel = cat.id;
+    del.title = 'Xóa danh mục';
+    del.setAttribute('aria-label', 'Xóa danh mục ' + cat.name);
+    del.innerHTML = '<svg class="ic"><use href="#i-trash"/></svg>';
+
+    row.append(dot, input, count, del);
+    els.catList.append(row);
+  }
+
+  els.catEmpty.hidden = state.categories.length > 0;
+}
+
+async function createCategoryFromManager(event) {
+  event.preventDefault();
+  const name = els.catNameInput.value.trim();
+  if (!name) {
+    els.catNameInput.focus();
+    return;
+  }
+
+  els.catError.hidden = true;
+  const existing = findCategoryByName(name);
+  try {
+    const cat = await ensureCategory(name);
+    els.catNameInput.value = '';
+    render();
+    els.catNameInput.focus();
+    toast(existing ? 'Danh mục đã tồn tại' : 'Đã thêm danh mục “' + cat.name + '”', existing ? 'info' : 'success');
+  } catch (err) {
+    els.catError.textContent = err.message;
+    els.catError.hidden = false;
+  }
+}
+
+async function renameCategory(input) {
+  const row = input.closest('.cat-row');
+  const cat = row ? catById(row.dataset.id) : null;
+  if (!cat) return;
+
+  const name = input.value.trim();
+  if (!name) {
+    input.value = cat.name;
+    toast('Tên danh mục không được để trống', 'error');
+    return;
+  }
+  if (name === cat.name) {
+    input.value = cat.name;
+    return;
+  }
+
+  try {
+    const updated = await api('/api/categories/' + encodeURIComponent(cat.id), {
+      method: 'PUT',
+      body: { name },
+    });
+    Object.assign(cat, updated);
+    input.value = cat.name;
+    render();
+    toast('Đã đổi tên danh mục', 'info');
+  } catch (err) {
+    input.value = cat.name;
+    toast(err.message, 'error');
+  }
+}
+
+async function deleteCategory(id) {
+  const cat = catById(id);
+  if (!cat) return;
+
+  const count = categoryCounts().get(id) || 0;
+  const ok = await askConfirm(
+    'Xóa danh mục?',
+    'Danh mục “' + cat.name + '” sẽ bị gỡ khỏi ' + fmtNumber(count) +
+      ' liên kết. Các liên kết vẫn được giữ lại.',
+    'Xóa'
+  );
+  if (!ok) return;
+
+  try {
+    await api('/api/categories/' + encodeURIComponent(id), { method: 'DELETE' });
+    state.categories = state.categories.filter((c) => c.id !== id);
+    for (const link of state.links) {
+      link.categoryIds = (link.categoryIds || []).filter((cid) => cid !== id);
+    }
+    if (state.filter === 'cat:' + id) state.filter = 'all';
+    render();
+    toast('Đã xóa danh mục');
+  } catch (err) {
+    toast(err.message, 'error');
   }
 }
 
@@ -811,12 +1163,17 @@ function bindDragAndDrop() {
 
 /* ---------- Initialisation ---------- */
 async function refresh() {
-  state.links = (await api('/api/links')) || [];
+  const [links, categories] = await Promise.all([api('/api/links'), api('/api/categories')]);
+  state.links = links || [];
+  state.categories = categories || [];
+  if (state.filter.startsWith('cat:') && !catById(state.filter.slice(4))) state.filter = 'all';
   render();
 }
 
 function bindEvents() {
   document.addEventListener('click', (event) => {
+    if (!event.target.closest('.cat-picker')) closeCatMenu();
+
     if (event.target.closest('.density-wrap')) {
       if (event.target.closest('#densityBtn')) {
         toggleDensityMenu();
@@ -832,6 +1189,12 @@ function bindEvents() {
       return;
     }
     closeDensityMenu();
+
+    const manageTrigger = event.target.closest('#manageCatsBtn, [data-action="manage-cats"]');
+    if (manageTrigger) {
+      openCatManager();
+      return;
+    }
 
     const filterBtn = event.target.closest('[data-filter]');
     if (filterBtn) {
@@ -919,6 +1282,64 @@ function bindEvents() {
   });
 
   els.linkForm.addEventListener('submit', submitEditor);
+
+  els.catPickerField.addEventListener('click', (event) => {
+    if (event.target.closest('.cat-chip-x')) return;
+    renderCatMenu();
+    els.fCatInput.focus();
+  });
+  els.fCatInput.addEventListener('focus', () => renderCatMenu());
+  els.fCatInput.addEventListener('input', () => {
+    catActive = 0;
+    renderCatMenu();
+  });
+  els.fCatInput.addEventListener('keydown', (event) => {
+    if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
+      const items = catMenuItems();
+      if (!items.length) return;
+      event.preventDefault();
+      catActive = (catActive + (event.key === 'ArrowDown' ? 1 : -1) + items.length) % items.length;
+      renderCatMenu();
+      return;
+    }
+    if (event.key === 'Enter' && !els.catMenu.hidden) {
+      event.preventDefault();
+      chooseCatItem(catActive);
+      return;
+    }
+    if (event.key === 'Escape' && !els.catMenu.hidden) {
+      event.preventDefault();
+      closeCatMenu();
+      return;
+    }
+    if (event.key === 'Backspace' && !els.fCatInput.value && catDraft.length) {
+      toggleCatDraft(catDraft[catDraft.length - 1]);
+    }
+  });
+  els.editDialog.addEventListener('close', closeCatMenu);
+
+  els.catCreateForm.addEventListener('submit', createCategoryFromManager);
+  els.catList.addEventListener('change', (event) => {
+    const input = event.target.closest('.cat-name');
+    if (input) renameCategory(input);
+  });
+  els.catList.addEventListener('keydown', (event) => {
+    if (event.key === 'Enter' && event.target.classList.contains('cat-name')) {
+      event.preventDefault();
+      event.target.blur();
+    }
+  });
+  els.catList.addEventListener('click', (event) => {
+    const del = event.target.closest('[data-cat-del]');
+    if (del) deleteCategory(del.dataset.catDel);
+  });
+  els.catDialog.addEventListener('click', (event) => {
+    if (event.target === els.catDialog) els.catDialog.close();
+  });
+  els.catDialog.addEventListener('close', () => {
+    els.catError.hidden = true;
+  });
+
   els.fetchBtn.addEventListener('click', () => fetchMetadata({ overwrite: true }));
   els.fUrl.addEventListener('blur', (event) => {
     if (event.relatedTarget === els.fetchBtn) return;
@@ -952,9 +1373,15 @@ function bindEvents() {
       els.densityBtn.focus();
       return;
     }
+    if (event.key === 'Escape' && !els.catMenu.hidden) {
+      event.preventDefault();
+      closeCatMenu();
+      els.fCatInput.focus();
+      return;
+    }
 
     const typing = event.target.closest('input, textarea, select, [contenteditable="true"]');
-    const modalOpen = els.editDialog.open || els.confirmDialog.open;
+    const modalOpen = els.editDialog.open || els.confirmDialog.open || els.catDialog.open;
 
     if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 'k') {
       event.preventDefault();

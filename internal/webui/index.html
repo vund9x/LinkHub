@@ -42,6 +42,9 @@
   <symbol id="i-link" viewBox="0 0 24 24"><path d="M10 13a5 5 0 007.5.5l2-2a5 5 0 00-7-7l-1.2 1.2"/><path d="M14 11a5 5 0 00-7.5-.5l-2 2a5 5 0 007 7l1.2-1.2"/></symbol>
   <symbol id="i-star-fill" viewBox="0 0 24 24"><path fill="currentColor" stroke="none" d="M12 3.6l2.6 5.3 5.9.9-4.3 4.2 1 5.8-5.2-2.7-5.2 2.7 1-5.8-4.3-4.2 5.9-.9L12 3.6z"/></symbol>
   <symbol id="i-inbox" viewBox="0 0 24 24"><path d="M4 5h16l2 9v4a2 2 0 01-2 2H4a2 2 0 01-2-2v-4l2-9z"/><path d="M2 14h5l2 3h6l2-3h5"/></symbol>
+  <symbol id="i-sliders" viewBox="0 0 24 24"><path d="M4 7h9M17 7h3M4 17h3M11 17h9"/><circle cx="15" cy="7" r="2.2"/><circle cx="9" cy="17" r="2.2"/></symbol>
+  <symbol id="i-tag" viewBox="0 0 24 24"><path d="M20.6 13.4l-7.2 7.2a2 2 0 01-2.8 0l-7-7a2 2 0 01-.6-1.4V4a1 1 0 011-1h8.2a2 2 0 011.4.6l7 7a2 2 0 010 2.8z"/><circle cx="7.5" cy="7.5" r="1.2"/></symbol>
+  <symbol id="i-chevron" viewBox="0 0 24 24"><path d="M6 9l6 6 6-6"/></symbol>
 </svg>
 
 <div class="app">
@@ -76,7 +79,12 @@
 
       <p class="nav-label nav-label-row">
         <span>Danh mục</span>
-        <span class="pill" data-count="cats">0</span>
+        <span class="nav-label-actions">
+          <span class="pill" data-count="cats">0</span>
+          <button class="icon-btn icon-btn-xs" type="button" id="manageCatsBtn" title="Quản lý danh mục" aria-label="Quản lý danh mục">
+            <svg class="ic"><use href="#i-sliders"/></svg>
+          </button>
+        </span>
       </p>
       <div id="catNav" class="cats"></div>
     </nav>
@@ -209,16 +217,22 @@
       <span class="field-hint">Không cần nhập https:// — hệ thống sẽ tự thêm.</span>
     </label>
 
-    <div class="field-grid">
-      <label class="field">
-        <span class="field-label">Tiêu đề</span>
-        <input id="fTitle" type="text" maxlength="120" placeholder="Tự động từ tên miền">
-      </label>
-      <label class="field">
-        <span class="field-label">Danh mục</span>
-        <input id="fCategory" type="text" maxlength="40" list="categoryOptions" placeholder="Ví dụ: Công cụ">
-        <datalist id="categoryOptions"></datalist>
-      </label>
+    <label class="field">
+      <span class="field-label">Tiêu đề</span>
+      <input id="fTitle" type="text" maxlength="120" placeholder="Tự động từ tên miền">
+    </label>
+
+    <div class="field">
+      <span class="field-label">Danh mục <span class="field-optional">chọn một hoặc nhiều</span></span>
+      <div class="cat-picker" id="catPicker">
+        <div class="cat-picker-field" id="catPickerField">
+          <div class="cat-picker-chips" id="catPickerChips"></div>
+          <input id="fCatInput" type="text" maxlength="40" placeholder="Tìm hoặc thêm danh mục..." autocomplete="off" spellcheck="false" aria-label="Chọn hoặc tạo danh mục" aria-controls="catMenu" role="combobox" aria-expanded="false">
+          <svg class="ic cat-picker-caret"><use href="#i-chevron"/></svg>
+        </div>
+        <div class="cat-menu" id="catMenu" role="listbox" aria-label="Danh mục" hidden></div>
+      </div>
+      <span class="field-hint">Chọn từ danh mục có sẵn; nhập tên mới rồi nhấn Enter để tạo ngay.</span>
     </div>
 
     <label class="field">
@@ -249,6 +263,39 @@
       <button class="btn btn-primary" type="submit" id="saveBtn">Lưu liên kết</button>
     </footer>
   </form>
+</dialog>
+
+<dialog id="catDialog" class="dialog dialog-cat">
+  <div class="cat-manager">
+    <header class="dialog-head">
+      <div>
+        <h2>Quản lý danh mục</h2>
+        <p class="dialog-sub">Thêm, đổi tên hoặc xóa danh mục. Liên kết được cập nhật theo.</p>
+      </div>
+      <button class="icon-btn" type="button" data-close aria-label="Đóng">
+        <svg class="ic"><use href="#i-x"/></svg>
+      </button>
+    </header>
+
+    <form id="catCreateForm" class="cat-create" novalidate>
+      <input id="catNameInput" type="text" maxlength="40" placeholder="Tên danh mục mới" autocomplete="off">
+      <button class="btn btn-primary btn-sm" type="submit">
+        <svg class="ic"><use href="#i-plus"/></svg>
+        Tạo
+      </button>
+    </form>
+
+    <p class="form-error" id="catError" hidden></p>
+
+    <ul class="cat-list" id="catList" aria-label="Danh sách danh mục"></ul>
+    <p class="cat-empty" id="catEmpty" hidden>Chưa có danh mục nào. Tạo danh mục đầu tiên ở ô phía trên.</p>
+
+    <p class="cat-tip">Mẹo: sau khi xóa danh mục, các liên kết bên trong vẫn được giữ lại.</p>
+
+    <footer class="dialog-foot">
+      <button class="btn" type="button" data-close>Đóng</button>
+    </footer>
+  </div>
 </dialog>
 
 <dialog id="confirmDialog" class="dialog dialog-sm">

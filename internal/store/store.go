@@ -1,4 +1,4 @@
-// Package store quản lý danh sách bookmark và lưu xuống file JSON nguyên tử.
+// Package store quản lý danh sách bookmark, danh mục và lưu xuống file JSON nguyên tử.
 package store
 
 import (
@@ -9,22 +9,34 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strings"
 	"sync"
 	"time"
 
 	"linkhub/internal/link"
 )
 
-type dbFile struct {
-	Version int         `json:"version"`
-	Links   []link.Link `json:"links"`
+// ErrCategoryNameTaken trả về khi tên danh mục trùng với danh mục đã có.
+var ErrCategoryNameTaken = errors.New("tên danh mục đã tồn tại")
+
+// ImportLink là liên kết trong tệp JSON, hỗ trợ trường category kiểu cũ.
+type ImportLink struct {
+	link.Link
+	Category string `json:"category,omitempty"`
 }
 
-// Store quản lý danh sách link và ghi xuống file JSON nguyên tử.
+type dbFile struct {
+	Version    int             `json:"version"`
+	Categories []link.Category `json:"categories"`
+	Links      []ImportLink    `json:"links"`
+}
+
+// Store quản lý danh sách link, danh mục và ghi xuống file JSON nguyên tử.
 type Store struct {
-	mu    sync.RWMutex
-	path  string
-	links []link.Link
+	mu         sync.RWMutex
+	path       string
+	links      []link.Link
+	categories []link.Category
 }
 
 // New nạp dữ liệu từ path; tạo thư mục và dữ liệu mẫu nếu file chưa tồn tại.
@@ -37,7 +49,7 @@ func New(path string) (*Store, error) {
 		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 			return nil, err
 		}
-		s.links = seedLinks()
+		s.categories, s.links = seedData()
 		s.mu.Lock()
 		err = s.saveLocked()
 		s.mu.Unlock()
@@ -48,6 +60,7 @@ func New(path string) (*Store, error) {
 
 	if len(data) == 0 {
 		s.links = []link.Link{}
+		s.categories = []link.Category{}
 		return s, nil
 	}
 
@@ -55,15 +68,144 @@ func New(path string) (*Store, error) {
 	if err := json.Unmarshal(data, &db); err != nil {
 		return nil, err
 	}
-	if db.Links == nil {
-		db.Links = []link.Link{}
+	s.links = make([]link.Link, len(db.Links))
+	for i := range db.Links {
+		s.links[i] = db.Links[i].Link
 	}
-	s.links = db.Links
+	s.categories = db.Categories
+
+	changed := s.normalize(db.Links)
+	if db.Version != 2 {
+		changed = true
+	}
+	if changed {
+		s.mu.Lock()
+		err = s.saveLocked()
+		s.mu.Unlock()
+		if err != nil {
+			return nil, err
+		}
+	}
 	return s, nil
 }
 
-func seedLinks() []link.Link {
+// normalize làm sạch danh mục và chuyển các trường category kiểu cũ sang categoryIds.
+func (s *Store) normalize(raw []ImportLink) bool {
+	changed := false
+
+	catIndex := make(map[string]int)
+	idRemap := make(map[string]string)
+	cats := make([]link.Category, 0, len(s.categories)+4)
+
+	for _, c := range s.categories {
+		name := strings.TrimSpace(c.Name)
+		if name == "" {
+			changed = true
+			continue
+		}
+		if name != c.Name {
+			c.Name = name
+			changed = true
+		}
+		key := nameKey(name)
+		if idx, ok := catIndex[key]; ok {
+			changed = true
+			if c.ID != "" && c.ID != cats[idx].ID {
+				idRemap[c.ID] = cats[idx].ID
+			}
+			continue
+		}
+		if c.ID == "" {
+			c.ID = newID()
+			changed = true
+		}
+		if c.CreatedAt.IsZero() {
+			c.CreatedAt = time.Now().UTC()
+			changed = true
+		}
+		if c.Order != len(cats) {
+			c.Order = len(cats)
+			changed = true
+		}
+		catIndex[key] = len(cats)
+		cats = append(cats, c)
+	}
+
+	known := make(map[string]bool, len(cats))
+	for _, c := range cats {
+		known[c.ID] = true
+	}
+
+	ensure := func(name string) string {
+		key := nameKey(name)
+		if idx, ok := catIndex[key]; ok {
+			return cats[idx].ID
+		}
+		c := link.Category{ID: newID(), Name: name, Order: len(cats), CreatedAt: time.Now().UTC()}
+		cats = append(cats, c)
+		catIndex[key] = len(cats) - 1
+		known[c.ID] = true
+		changed = true
+		return c.ID
+	}
+
+	for i := range raw {
+		old := raw[i].Link.CategoryIDs
+		ids := make([]string, 0, len(old)+1)
+		seen := make(map[string]bool, len(old)+1)
+		add := func(id string) {
+			if mapped, ok := idRemap[id]; ok {
+				id = mapped
+				changed = true
+			}
+			if id == "" || !known[id] || seen[id] {
+				return
+			}
+			seen[id] = true
+			ids = append(ids, id)
+		}
+		for _, id := range old {
+			add(id)
+		}
+		if name := strings.TrimSpace(raw[i].Category); name != "" {
+			add(ensure(name))
+		}
+		if !sameIDs(old, ids) {
+			changed = true
+		}
+		s.links[i].CategoryIDs = ids
+	}
+
+	s.categories = cats
+	return changed
+}
+
+func sameIDs(a, b []string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+	return true
+}
+
+func nameKey(name string) string {
+	return strings.ToLower(strings.Join(strings.Fields(name), " "))
+}
+
+func seedData() ([]link.Category, []link.Link) {
 	now := time.Now().UTC()
+	names := []string{"Phát triển", "Công cụ", "Giải trí", "Tiện ích"}
+	cats := make([]link.Category, len(names))
+	byName := make(map[string]string, len(names))
+	for i, name := range names {
+		cats[i] = link.Category{ID: newID(), Name: name, Order: i, CreatedAt: now}
+		byName[name] = cats[i].ID
+	}
+
 	seeds := []struct {
 		title, url, desc, category string
 		pinned                     bool
@@ -81,13 +223,13 @@ func seedLinks() []link.Link {
 			Title:       sd.title,
 			URL:         sd.url,
 			Description: sd.desc,
-			Category:    sd.category,
+			CategoryIDs: []string{byName[sd.category]},
 			Pinned:      sd.pinned,
 			CreatedAt:   now,
 			Order:       i,
 		})
 	}
-	return links
+	return cats, links
 }
 
 func newID() string {
@@ -98,7 +240,7 @@ func newID() string {
 	return hex.EncodeToString(b)
 }
 
-// List trả về bản sao danh sách đã sắp xếp theo thứ tự hiển thị.
+// List trả về bản sao danh sách link đã sắp xếp theo thứ tự hiển thị.
 func (s *Store) List() []link.Link {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
@@ -114,6 +256,123 @@ func (s *Store) List() []link.Link {
 	return out
 }
 
+// Categories trả về bản sao danh mục đã sắp xếp theo thứ tự hiển thị.
+func (s *Store) Categories() []link.Category {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	out := make([]link.Category, len(s.categories))
+	copy(out, s.categories)
+	sort.SliceStable(out, func(i, j int) bool {
+		if out[i].Order != out[j].Order {
+			return out[i].Order < out[j].Order
+		}
+		return out[i].CreatedAt.Before(out[j].CreatedAt)
+	})
+	return out
+}
+
+// CreateCategory thêm danh mục mới; trả về danh mục đã có nếu tên trùng.
+func (s *Store) CreateCategory(name string) (link.Category, bool, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	key := nameKey(name)
+	for _, c := range s.categories {
+		if nameKey(c.Name) == key {
+			return c, false, nil
+		}
+	}
+
+	c := link.Category{
+		ID:        newID(),
+		Name:      name,
+		Order:     s.nextCategoryOrderLocked(),
+		CreatedAt: time.Now().UTC(),
+	}
+	s.categories = append(s.categories, c)
+	if err := s.saveLocked(); err != nil {
+		s.categories = s.categories[:len(s.categories)-1]
+		return link.Category{}, false, err
+	}
+	return c, true, nil
+}
+
+// UpdateCategory đổi tên danh mục.
+func (s *Store) UpdateCategory(id, name string) (link.Category, bool, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	idx := -1
+	for i := range s.categories {
+		if s.categories[i].ID == id {
+			idx = i
+			break
+		}
+	}
+	if idx < 0 {
+		return link.Category{}, false, nil
+	}
+
+	key := nameKey(name)
+	for i, c := range s.categories {
+		if i != idx && nameKey(c.Name) == key {
+			return link.Category{}, true, ErrCategoryNameTaken
+		}
+	}
+
+	old := s.categories[idx]
+	s.categories[idx].Name = name
+	if err := s.saveLocked(); err != nil {
+		s.categories[idx] = old
+		return link.Category{}, true, err
+	}
+	return s.categories[idx], true, nil
+}
+
+// DeleteCategory xóa danh mục và gỡ nó khỏi mọi liên kết.
+func (s *Store) DeleteCategory(id string) (bool, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	idx := -1
+	for i := range s.categories {
+		if s.categories[i].ID == id {
+			idx = i
+			break
+		}
+	}
+	if idx < 0 {
+		return false, nil
+	}
+
+	oldLinks := make([]link.Link, len(s.links))
+	copy(oldLinks, s.links)
+	oldCats := make([]link.Category, len(s.categories))
+	copy(oldCats, s.categories)
+
+	s.categories = append(s.categories[:idx], s.categories[idx+1:]...)
+	for i := range s.links {
+		if len(s.links[i].CategoryIDs) == 0 {
+			continue
+		}
+		next := make([]string, 0, len(s.links[i].CategoryIDs))
+		for _, cid := range s.links[i].CategoryIDs {
+			if cid != id {
+				next = append(next, cid)
+			}
+		}
+		s.links[i].CategoryIDs = next
+	}
+
+	if err := s.saveLocked(); err != nil {
+		s.links = oldLinks
+		s.categories = oldCats
+		return false, err
+	}
+	return true, nil
+}
+
 func (s *Store) Create(l link.Link) (link.Link, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -123,6 +382,7 @@ func (s *Store) Create(l link.Link) (link.Link, error) {
 	l.Order = s.nextOrderLocked()
 	l.Visits = 0
 	l.LastVisited = nil
+	l.CategoryIDs = s.filterCategoryIDsLocked(l.CategoryIDs)
 
 	s.links = append(s.links, l)
 	if err := s.saveLocked(); err != nil {
@@ -150,6 +410,7 @@ func (s *Store) Update(id string, apply func(*link.Link)) (link.Link, bool, erro
 	updated.Order = old.Order
 	updated.Visits = old.Visits
 	updated.LastVisited = old.LastVisited
+	updated.CategoryIDs = s.filterCategoryIDsLocked(updated.CategoryIDs)
 
 	s.links[idx] = updated
 	if err := s.saveLocked(); err != nil {
@@ -238,27 +499,105 @@ func (s *Store) Reorder(ids []string) error {
 	return nil
 }
 
-func (s *Store) Import(links []link.Link, replace bool) (int, error) {
+// Import thêm hoặc thay thế danh mục và liên kết từ tệp JSON.
+func (s *Store) Import(categories []link.Category, links []ImportLink, replace bool) (int, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	if replace {
-		s.links = nil
+	cats := make([]link.Category, 0, len(s.categories)+len(categories))
+	catIndex := make(map[string]int)
+	known := make(map[string]bool)
+	usedID := make(map[string]bool)
+
+	if !replace {
+		for _, c := range s.categories {
+			cats = append(cats, c)
+			catIndex[nameKey(c.Name)] = len(cats) - 1
+			known[c.ID] = true
+			usedID[c.ID] = true
+		}
 	}
 
-	start := s.nextOrderLocked()
-	existing := make(map[string]bool, len(s.links))
-	for _, l := range s.links {
-		existing[l.ID] = true
+	for _, c := range categories {
+		name := strings.TrimSpace(c.Name)
+		if name == "" {
+			continue
+		}
+		key := nameKey(name)
+		if _, ok := catIndex[key]; ok {
+			continue
+		}
+		id := strings.TrimSpace(c.ID)
+		if id == "" || usedID[id] {
+			id = newID()
+		}
+		c.ID = id
+		c.Name = name
+		c.Order = len(cats)
+		if c.CreatedAt.IsZero() {
+			c.CreatedAt = time.Now().UTC()
+		}
+		cats = append(cats, c)
+		catIndex[key] = len(cats) - 1
+		known[id] = true
+		usedID[id] = true
+	}
+
+	ensure := func(name string) string {
+		name = strings.TrimSpace(name)
+		key := nameKey(name)
+		if idx, ok := catIndex[key]; ok {
+			return cats[idx].ID
+		}
+		c := link.Category{ID: newID(), Name: name, Order: len(cats), CreatedAt: time.Now().UTC()}
+		cats = append(cats, c)
+		catIndex[key] = len(cats) - 1
+		known[c.ID] = true
+		usedID[c.ID] = true
+		return c.ID
+	}
+
+	var next []link.Link
+	if !replace {
+		next = make([]link.Link, len(s.links), len(s.links)+len(links))
+		copy(next, s.links)
+	}
+
+	idSet := make(map[string]bool, len(next))
+	for _, l := range next {
+		idSet[l.ID] = true
+	}
+	start := 0
+	for _, l := range next {
+		if l.Order >= start {
+			start = l.Order + 1
+		}
 	}
 
 	added := 0
 	now := time.Now().UTC()
-	for _, l := range links {
-		if l.ID == "" || existing[l.ID] {
+	for _, in := range links {
+		l := in.Link
+		ids := make([]string, 0, len(l.CategoryIDs)+1)
+		seen := make(map[string]bool, len(l.CategoryIDs)+1)
+		add := func(id string) {
+			if id == "" || !known[id] || seen[id] {
+				return
+			}
+			seen[id] = true
+			ids = append(ids, id)
+		}
+		for _, id := range l.CategoryIDs {
+			add(strings.TrimSpace(id))
+		}
+		if name := strings.TrimSpace(in.Category); name != "" {
+			add(ensure(name))
+		}
+		l.CategoryIDs = ids
+		if l.ID == "" || idSet[l.ID] {
 			l.ID = newID()
 		}
-		existing[l.ID] = true
+		idSet[l.ID] = true
 		if l.CreatedAt.IsZero() {
 			l.CreatedAt = now
 		}
@@ -266,11 +605,14 @@ func (s *Store) Import(links []link.Link, replace bool) (int, error) {
 		if l.Visits < 0 {
 			l.Visits = 0
 		}
-		s.links = append(s.links, l)
+		next = append(next, l)
 		added++
 	}
 
+	oldLinks, oldCats := s.links, s.categories
+	s.links, s.categories = next, cats
 	if err := s.saveLocked(); err != nil {
+		s.links, s.categories = oldLinks, oldCats
 		return 0, err
 	}
 	return added, nil
@@ -295,11 +637,52 @@ func (s *Store) nextOrderLocked() int {
 	return max + 1
 }
 
-func (s *Store) saveLocked() error {
-	db := dbFile{Version: 1, Links: s.links}
-	if db.Links == nil {
-		db.Links = []link.Link{}
+func (s *Store) nextCategoryOrderLocked() int {
+	max := -1
+	for _, c := range s.categories {
+		if c.Order > max {
+			max = c.Order
+		}
 	}
+	return max + 1
+}
+
+func (s *Store) filterCategoryIDsLocked(ids []string) []string {
+	out := make([]string, 0, len(ids))
+	if len(ids) == 0 {
+		return out
+	}
+	known := make(map[string]bool, len(s.categories))
+	for _, c := range s.categories {
+		known[c.ID] = true
+	}
+	seen := make(map[string]bool, len(ids))
+	for _, id := range ids {
+		if id == "" || !known[id] || seen[id] {
+			continue
+		}
+		seen[id] = true
+		out = append(out, id)
+	}
+	return out
+}
+
+func (s *Store) saveLocked() error {
+	db := dbFile{
+		Version:    2,
+		Categories: s.categories,
+		Links:      make([]ImportLink, len(s.links)),
+	}
+	for i, l := range s.links {
+		db.Links[i] = ImportLink{Link: l}
+	}
+	if db.Categories == nil {
+		db.Categories = []link.Category{}
+	}
+	if db.Links == nil {
+		db.Links = []ImportLink{}
+	}
+
 	data, err := json.MarshalIndent(db, "", "  ")
 	if err != nil {
 		return err

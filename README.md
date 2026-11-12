@@ -5,8 +5,9 @@ Bảng liên kết (bookmark) cá nhân chạy trong mạng LAN. Toàn bộ giao
 ## Tính năng
 
 - Thêm, sửa, xóa liên kết; nhấp vào thẻ để mở trang trong tab mới.
-- Đánh dấu yêu thích (lọc nhanh), phân loại theo danh mục tùy chỉnh.
-- Tìm kiếm tức thời, không phân biệt dấu tiếng Việt (`mang` khớp `mạng`).
+- Đánh dấu yêu thích (lọc nhanh), gán **nhiều danh mục** cho một liên kết.
+- Chọn danh mục có sẵn trong biểu mẫu hoặc tạo danh mục mới ngay tại chỗ; quản lý danh mục (thêm, đổi tên, xóa) ở sidebar.
+- Tìm kiếm tức thời, không phân biệt dấu tiếng Việt (`mang` khớp `mạng`), khớp cả tên danh mục.
 - Sắp xếp thủ công (kéo thả), mới nhất, xem nhiều, A → Z.
 - Đếm lượt truy cập và thời điểm truy cập gần nhất.
 - Tự động lấy tiêu đề và mô tả từ URL khi thêm liên kết.
@@ -75,8 +76,31 @@ Ví dụ chỉ cho phép truy cập từ chính máy:
 
 - Dữ liệu nằm tại `data/links.json`, được tạo tự động cùng 5 liên kết mẫu trong lần chạy đầu tiên.
 - Mỗi lần ghi, ứng dụng ghi file tạm rồi đổi tên để tránh mất dữ liệu khi ghi dở.
+- Định dạng phiên bản 2: danh mục được lưu riêng trong `categories`, mỗi liên kết tham chiếu bằng `categoryIds`. File phiên bản 1 (trường `category` dạng chuỗi) được tự động chuyển đổi khi khởi động và khi nhập dữ liệu.
+- Xóa danh mục chỉ gỡ danh mục khỏi các liên kết, không xóa liên kết.
 - Sao lưu: dùng nút tải xuống trong sidebar hoặc gọi `GET /api/export`.
 - Khôi phục: dùng nút tải lên trong sidebar (chế độ **merge**) hoặc gọi `POST /api/import?mode=replace` để thay thế toàn bộ.
+
+Ví dụ dữ liệu (rút gọn):
+
+```json
+{
+  "version": 2,
+  "categories": [
+    { "id": "a1b2c3", "name": "Phát triển", "order": 0, "createdAt": "2026-11-12T02:00:00Z" }
+  ],
+  "links": [
+    {
+      "id": "f00dfeed",
+      "title": "MDN Web Docs",
+      "url": "https://developer.mozilla.org",
+      "categoryIds": ["a1b2c3"],
+      "order": 0,
+      "createdAt": "2026-11-12T02:00:00Z"
+    }
+  ]
+}
+```
 
 ## API
 
@@ -88,6 +112,10 @@ Ví dụ chỉ cho phép truy cập từ chính máy:
 | `DELETE` | `/api/links/{id}` | Xóa liên kết |
 | `POST` | `/api/links/{id}/visit` | Ghi nhận một lượt truy cập |
 | `POST` | `/api/reorder` | Đổi thứ tự, body `{"ids": ["id1", "id2"]}` |
+| `GET` | `/api/categories` | Danh sách danh mục |
+| `POST` | `/api/categories` | Tạo danh mục, body `{"name": "Tên"}`; trả `200` kèm danh mục đã có nếu trùng tên (không phân biệt hoa thường), `201` nếu tạo mới |
+| `PUT` | `/api/categories/{id}` | Đổi tên danh mục, body `{"name": "Tên mới"}`; `409` khi tên đã tồn tại |
+| `DELETE` | `/api/categories/{id}` | Xóa danh mục và gỡ nó khỏi mọi liên kết |
 | `GET` | `/api/export` | Tải file JSON sao lưu |
 | `POST` | `/api/import` | Nhập JSON; thêm `?mode=replace` để thay thế toàn bộ |
 | `GET` | `/api/metadata?url=...` | Lấy tiêu đề/mô tả của trang |
@@ -96,10 +124,15 @@ Ví dụ chỉ cho phép truy cập từ chính máy:
 Ví dụ:
 
 ```bash
-# Tạo liên kết (có thể bỏ qua https://)
+# Tạo liên kết với một hoặc nhiều danh mục (có thể bỏ qua https://)
 curl -X POST http://localhost:8080/api/links \
   -H "Content-Type: application/json" \
-  -d '{"url": "example.com", "title": "Example", "category": "Tiện ích"}'
+  -d '{"url": "example.com", "title": "Example", "categoryIds": ["<id-danh-muc>"]}'
+
+# Tạo danh mục mới
+curl -X POST http://localhost:8080/api/categories \
+  -H "Content-Type: application/json" \
+  -d '{"name": "Tiện ích"}'
 
 # Sao lưu
 curl -o linkhub-backup.json http://localhost:8080/api/export
@@ -110,7 +143,7 @@ curl -X POST "http://localhost:8080/api/import?mode=replace" \
   --data-binary @linkhub-backup.json
 ```
 
-Chỉ URL `http` và `https` được chấp nhận; URL thiếu scheme sẽ tự động được thêm `https://`.
+Chỉ URL `http` và `https` được chấp nhận; URL thiếu scheme sẽ tự động được thêm `https://`. Trường `category` (chuỗi) kiểu cũ vẫn được chấp nhận khi tạo/cập nhật/nhập dữ liệu và sẽ tự động ánh xạ sang danh mục tương ứng.
 
 ## Cấu trúc thư mục
 
@@ -118,11 +151,11 @@ Chỉ URL `http` và `https` được chấp nhận; URL thiếu scheme sẽ t�
 Link-Dashboard/
 ├── cmd/linkhub/main.go          # Entrypoint: cờ, khởi động, graceful shutdown
 ├── internal/
-│   ├── link/link.go             # Model Link dùng chung
+│   ├── link/link.go             # Model Link và Category dùng chung
 │   ├── store/store.go           # Lưu trữ JSON, ghi nguyên tử
 │   ├── server/
 │   │   ├── server.go            # Server, routes, phục vụ SPA
-│   │   ├── handlers.go          # CRUD, visit, reorder, import/export
+│   │   ├── handlers.go          # CRUD liên kết/danh mục, visit, reorder, import/export
 │   │   ├── metadata.go          # Lấy tiêu đề/mô tả từ URL
 │   │   ├── probe.go             # Kiểm tra trạng thái liên kết
 │   │   ├── helpers.go           # Chuẩn hóa URL, JSON helpers
